@@ -38,12 +38,13 @@ def register():
 def approve_user():
     current_user = get_jwt_identity()
     user = User.query.filter_by(username=current_user).first()
+    
     if not user or user.role != 'admin':
         return jsonify({'message': 'Access Denied! Only admins can approve users.'}), 403
-    
+
     data = request.json
     user_to_approve = User.query.filter_by(username=data['username']).first()
-    
+
     if not user_to_approve:
         return jsonify({'message': 'User not found'}), 404
 
@@ -51,22 +52,16 @@ def approve_user():
     db.session.commit()
     return jsonify({'message': 'User approved successfully!'})
 
-    data = request.json
-    user_to_approve = User.query.filter_by(username=data['username']).first()
-    if user_to_approve:
-        user_to_approve.approved = True
-        db.session.commit()
-        return jsonify({'message': 'User approved'})
-    return jsonify({'message': 'User not found'})
-
 @app.route('/login', methods=['POST'])
 def login():
     data = request.json
     user = User.query.filter_by(username=data['username']).first()
+    
     if not user or not check_password_hash(user.password, data['password']):
         return jsonify({'message': 'Invalid credentials'}), 401
     if not user.approved:
         return jsonify({'message': 'User not approved'}), 403
+    
     access_token = create_access_token(identity=user.username)
     return jsonify({'token': access_token, 'role': user.role})
 
@@ -75,13 +70,17 @@ def login():
 def upload_excel():
     current_user = get_jwt_identity()
     user = User.query.filter_by(username=current_user).first()
+    
     if user.role != 'admin':
         return jsonify({'message': 'Unauthorized'}), 403
-    file = request.files['file']
-    if file:
-        file.save('costing_data.xlsx')
-        return jsonify({'message': 'File uploaded successfully'})
-    return jsonify({'message': 'No file received'})
+
+    file = request.files.get('file')
+    
+    if not file:
+        return jsonify({'message': 'No file received'}), 400
+
+    file.save('costing_data.xlsx')
+    return jsonify({'message': 'File uploaded successfully'})
 
 @app.route('/get_costing', methods=['GET'])
 @jwt_required()
@@ -97,44 +96,23 @@ def get_costing():
     if not os.path.exists(excel_path):
         return jsonify({'message': 'No costing data available'}), 404
 
-    # Read data from all four sheets (modify if needed)
-    sheets = ["Sheet1", "Sheet2", "Sheet3", "Sheet4"]
-    costing_data = {}
-
-    for sheet in sheets:
-        try:
-            df = pd.read_excel(excel_path, sheet_name=sheet)
-            costing_data[sheet] = df.to_dict(orient="records")
-        except Exception as e:
-            costing_data[sheet] = f"Error reading {sheet}: {str(e)}"
-
-    return jsonify(costing_data)
-
-    current_user = get_jwt_identity()
-    user = User.query.filter_by(username=current_user).first()
-    
-    if not user or not user.approved:
-        return jsonify({'message': 'Access Denied!'}), 403
-
-    if not os.path.exists('costing_data.xlsx'):
-        return jsonify({'message': 'No costing data available'}), 404
-    
-    df = pd.read_excel('costing_data.xlsx', sheet_name='Sheet4')
-    return jsonify(df.to_dict(orient='records'))
+    try:
+        df = pd.read_excel(excel_path, sheet_name="Sheet4")
+        return jsonify(df.to_dict(orient='records'))
+    except Exception as e:
+        return jsonify({'message': f'Error reading file: {str(e)}'}), 500
 
 @app.route('/download_result', methods=['GET'])
 @jwt_required()
 def download_result():
-    if not os.path.exists('costing_data.xlsx'):
+    file_path = 'costing_data.xlsx'
+    
+    if not os.path.exists(file_path):
         return jsonify({'message': 'No costing data available'}), 404
-    return send_file('costing_data.xlsx', as_attachment=True)
 
-import os
+    return send_file(file_path, as_attachment=True)
 
-import os
-
+# Start Flask app (for local testing)
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 10000))  # Render provides a PORT environment variable
-    app.run(host="0.0.0.0", port=port, debug=True)
-
-
+    port = int(os.environ.get("PORT", 10000))  # Render assigns a dynamic PORT
+    app.run(host="0.0.0.0", port=port, debug=False)  # Disable debug for production
