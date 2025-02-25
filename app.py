@@ -8,10 +8,12 @@ from werkzeug.security import generate_password_hash, check_password_hash
 
 # Initialize Flask app
 app = Flask(__name__)
-CORS(app)  # Enable CORS to allow frontend requests
+CORS(app)  # Enable CORS for frontend requests
 
+# Configure database and JWT
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///users.db'
 app.config['JWT_SECRET_KEY'] = 'your_secret_key'
+
 db = SQLAlchemy(app)
 jwt = JWTManager(app)
 
@@ -23,7 +25,16 @@ class User(db.Model):
     role = db.Column(db.String(10), nullable=False, default='user')
     approved = db.Column(db.Boolean, default=False)
 
-# Routes
+# Create the database
+with app.app_context():
+    db.create_all()
+
+# ✅ Default Home Route (Prevents 404)
+@app.route('/')
+def home():
+    return jsonify({'message': 'Costing App is running successfully!'}), 200
+
+# ✅ User Registration
 @app.route('/register', methods=['POST'])
 def register():
     data = request.json
@@ -33,15 +44,16 @@ def register():
     db.session.commit()
     return jsonify({'message': 'User registered, pending admin approval'})
 
+# ✅ User Approval (Admin Only)
 @app.route('/approve_user', methods=['POST'])
 @jwt_required()
 def approve_user():
     current_user = get_jwt_identity()
-    user = User.query.filter_by(username=current_user).first()
-    
-    if not user or user.role != 'admin':
-        return jsonify({'message': 'Access Denied! Only admins can approve users.'}), 403
+    admin = User.query.filter_by(username=current_user).first()
 
+    if not admin or admin.role != 'admin':
+        return jsonify({'message': 'Access Denied! Only admins can approve users.'}), 403
+    
     data = request.json
     user_to_approve = User.query.filter_by(username=data['username']).first()
 
@@ -52,6 +64,7 @@ def approve_user():
     db.session.commit()
     return jsonify({'message': 'User approved successfully!'})
 
+# ✅ User Login
 @app.route('/login', methods=['POST'])
 def login():
     data = request.json
@@ -59,29 +72,31 @@ def login():
     
     if not user or not check_password_hash(user.password, data['password']):
         return jsonify({'message': 'Invalid credentials'}), 401
+    
     if not user.approved:
         return jsonify({'message': 'User not approved'}), 403
     
     access_token = create_access_token(identity=user.username)
     return jsonify({'token': access_token, 'role': user.role})
 
+# ✅ Upload Costing Excel File (Admin Only)
 @app.route('/upload_excel', methods=['POST'])
 @jwt_required()
 def upload_excel():
     current_user = get_jwt_identity()
     user = User.query.filter_by(username=current_user).first()
     
-    if user.role != 'admin':
+    if not user or user.role != 'admin':
         return jsonify({'message': 'Unauthorized'}), 403
-
-    file = request.files.get('file')
     
-    if not file:
-        return jsonify({'message': 'No file received'}), 400
+    file = request.files.get('file')
+    if file:
+        file.save('costing_data.xlsx')
+        return jsonify({'message': 'File uploaded successfully'})
+    
+    return jsonify({'message': 'No file received'}), 400
 
-    file.save('costing_data.xlsx')
-    return jsonify({'message': 'File uploaded successfully'})
-
+# ✅ Fetch Costing Data (Approved Users Only)
 @app.route('/get_costing', methods=['GET'])
 @jwt_required()
 def get_costing():
@@ -91,28 +106,32 @@ def get_costing():
     if not user or not user.approved:
         return jsonify({'message': 'Access Denied!'}), 403
 
-    excel_path = "costing_data.xlsm"  # Change to match your filename
+    excel_path = "costing_data.xlsm"
 
     if not os.path.exists(excel_path):
         return jsonify({'message': 'No costing data available'}), 404
 
-    try:
-        df = pd.read_excel(excel_path, sheet_name="Sheet4")
-        return jsonify(df.to_dict(orient='records'))
-    except Exception as e:
-        return jsonify({'message': f'Error reading file: {str(e)}'}), 500
+    sheets = ["Sheet1", "Sheet2", "Sheet3", "Sheet4"]
+    costing_data = {}
 
+    for sheet in sheets:
+        try:
+            df = pd.read_excel(excel_path, sheet_name=sheet)
+            costing_data[sheet] = df.to_dict(orient="records")
+        except Exception as e:
+            costing_data[sheet] = f"Error reading {sheet}: {str(e)}"
+
+    return jsonify(costing_data)
+
+# ✅ Download Costing Data
 @app.route('/download_result', methods=['GET'])
 @jwt_required()
 def download_result():
-    file_path = 'costing_data.xlsx'
-    
-    if not os.path.exists(file_path):
+    if not os.path.exists('costing_data.xlsx'):
         return jsonify({'message': 'No costing data available'}), 404
+    return send_file('costing_data.xlsx', as_attachment=True)
 
-    return send_file(file_path, as_attachment=True)
-
-# Start Flask app (for local testing)
+# ✅ Run the Flask App with Gunicorn (Render Deployment)
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 10000))  # Render assigns a dynamic PORT
-    app.run(host="0.0.0.0", port=port, debug=False)  # Disable debug for production
+    port = int(os.environ.get("PORT", 10000))  # Render sets PORT automatically
+    app.run(host="0.0.0.0", port=port, debug=True)
